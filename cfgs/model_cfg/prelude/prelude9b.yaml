@@ -1,0 +1,11 @@
+defaults: [base, _self_]
+model_log_name: prelude9b
+model_name_or_path: /leonardo_work/AIFAC_F02_352/anna/models/prelude-anneal300b   # revision anneal300b_iter_0989075
+model_args:
+  model_revision: main
+  torch_dtype: bfloat16
+  attn_implementation: flash_attention_2
+tokenizer:
+  model_revision: ${model_args.model_revision}
+make_tokenizer_fn:
+  force_override_pad_token: true
