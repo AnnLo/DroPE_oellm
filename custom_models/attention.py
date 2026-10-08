@@ -309,3 +309,7 @@ KNormNoPELlamaAttention = qk_norm(LlamaAttention, llama_k_norm_nope_attn_forward
 QKNormNoPEQwen2Attention = qk_norm(Qwen2Attention, qwen2_qk_norm_nope_attn_forward)
 QNormNoPEQwen2Attention = qk_norm(Qwen2Attention, qwen2_q_norm_nope_attn_forward)
 KNormNoPEQwen2Attention = qk_norm(Qwen2Attention, qwen2_k_norm_nope_attn_forward)
+
+# --- Qwen3 support ---
+from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention
+NoPEQwen3Attention = nope(Qwen3Attention)

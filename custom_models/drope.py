@@ -211,3 +211,12 @@ DroPELlamaConfig = _create_drope_config_class(LlamaConfig, attention_type="nope"
 
 DroPEQwen2ForCausalLM = _create_drope_model_class(Qwen2ForCausalLM)
 DroPELlamaForCausalLM = _create_drope_model_class(LlamaForCausalLM)
+
+# --- Qwen3 support ---
+from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM, Qwen3Attention, Qwen3Config
+from custom_models.attention import NoPEQwen3Attention
+
+MODEL_ARCH_MAP[Qwen3ForCausalLM] = (Qwen3Attention, Qwen3Config)
+ATTENTION_VARIANTS[Qwen3Attention] = {"nope": NoPEQwen3Attention}
+DroPEQwen3Config = _create_drope_config_class(Qwen3Config, attention_type="nope")
+DroPEQwen3ForCausalLM = _create_drope_model_class(Qwen3ForCausalLM)

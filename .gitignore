@@ -1,0 +1,7 @@
+__pycache__/
+accuracy/
+results/
+outputs/
+multirun/
+wandb/
+*.out

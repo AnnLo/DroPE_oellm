@@ -1,0 +1,23 @@
+defaults:
+  - override /trainer_cfg@_global_: base_trainer
+  - override /model_cfg@_global_: smollm/smollm360m
+  - override /data_cfg@_global_: fineweb_edu_shuffled
+  - _self_
+
+custom_class: custom_models.drope.DroPEQwen3ForCausalLM
+from_pretrained: true
+drope: true
+
+model_custom_config:
+  _target_: custom_models.drope.DroPEQwen3Config.from_pretrained
+  pretrained_model_name_or_path: ${model_name_or_path}
+  attention_type: nope
+
+
+
+max_seq_length: 2048
+max_steps: 120000
+learning_rate: 3e-4
+
+wandb_project: drope
+wandb_run_name: ${trainer_log_name}_${model_log_name}_${max_steps}steps_lr${learning_rate}
