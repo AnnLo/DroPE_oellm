@@ -4,6 +4,8 @@ defaults:
   - override /data_cfg@_global_: fineweb_edu_shuffled
   - _self_
 
+data_log_name: longctx_mix_10b   # used in the W&B group and output_dir
+
 # --- Model: openeurollm/prelude, revision anneal300b_iter_0989075 (Qwen3, ~9B) ---
 # Path, dtype (bf16) and log name come from cfgs/model_cfg/prelude/prelude9b.yaml
 custom_class: custom_models.drope.DroPEQwen3ForCausalLM
@@ -18,7 +20,7 @@ model_custom_config:
 # --- Recalibration settings (from llama2_7b_drope.yaml) ---
 max_seq_length: 4096          # prelude's native context length
 train_batch_size: 512         # sequences per optimizer step (~2.1M tokens)
-per_device_train_batch_size: 1
+per_device_train_batch_size: 2
 max_steps: 5000               # ~10B tokens; the paper used 20B for Llama-2-7B (= 10000 steps)
 learning_rate: 1.0e-4
 lr_scheduler_type: cosine
