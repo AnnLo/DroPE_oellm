@@ -1,0 +1,42 @@
+# Soft DroPE + QK norm on SmolLM-360M: same as smollm_360m_drope_qk_norm, but RoPE is removed gradually.
+#   soft_mode: angle  -> theta * m * alpha
+#   soft_mode: output -> alpha * Attn_RoPE + (1 - alpha) * Attn_NoPE
+#   qk_norm: none | q | k | qk  (RMSNorm on query/key projections, as the repo's qk_norm_nope)
+# alpha follows trainer.callbacks._args_[0]: 1 -> 0 between start_frac and end_frac of max_steps,
+# then 0 (pure NoPE) for the rest.
+# Override from the command line, e.g.:
+#   model_custom_config.soft_mode=output  trainer.callbacks._args_.0.end_frac=0.3
+defaults:
+  - override /trainer_cfg@_global_: base_trainer
+  - override /model_cfg@_global_: smollm/smollm360m
+  - override /data_cfg@_global_: fineweb_edu_shuffled
+  - _self_
+
+custom_class: custom_models.soft_drope.SoftDroPELlamaForCausalLM
+from_pretrained: true
+drope: true   # -> custom_class.from_pretrained(model_name_or_path, config=model_custom_config)
+
+model_custom_config:
+  _target_: custom_models.soft_drope.SoftDroPELlamaConfig.from_pretrained
+  pretrained_model_name_or_path: ${model_name_or_path}
+  soft_mode: angle
+  rope_alpha: 1.0
+  qk_norm: qk
+
+# Hydra would pass a list as an OmegaConf ListConfig, which the HF Trainer can't extend
+# with its own callbacks. hydra_utils.wrap_as_list (from the repo) returns a plain list.
+trainer:
+  callbacks:
+    _target_: hydra_utils.wrap_as_list
+    _args_:
+      - _target_: custom_models.soft_drope.RopeAlphaSchedule
+        start_frac: 0.0
+        end_frac: 0.5
+        shape: linear
+
+max_seq_length: 2048
+max_steps: 120000
+learning_rate: 3e-4
+
+wandb_project: drope
+wandb_run_name: soft_${model_custom_config.soft_mode}_qknorm-${model_custom_config.qk_norm}_${model_log_name}_${max_steps}steps_lr${learning_rate}

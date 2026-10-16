@@ -1,0 +1,16 @@
+# Slurm logs
+*.out
+*.err
+
+# Training outputs and logs
+results/
+wandb/
+outputs/
+
+# Downloaded evaluate metric (symlink to ../DroPE/accuracy)
+accuracy
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
