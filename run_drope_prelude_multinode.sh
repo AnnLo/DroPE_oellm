@@ -32,7 +32,7 @@ set -eo pipefail
 
 BASE=/leonardo_work/AIFAC_F02_352/anna
 SCR=/leonardo_scratch/fast/AIFAC_F02_352/anna
-DROPE_DIR=${DROPE_DIR:-$BASE/DroPE_abl}
+DROPE_DIR=${DROPE_DIR:-$BASE/DroPE}
 CONDA_ENV=${CONDA_ENV:-drope}
 RUN_CFG=${RUN_CFG:-prelude_drope}; RUN_CFG=${RUN_CFG%.yaml}
 RUN_ID=${RUN_ID:-10b_run1}

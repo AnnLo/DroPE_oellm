@@ -144,6 +144,7 @@ def load_pretraining_dataset(
         block_size=None,
         manually_add_eos=False,
         mask_past_sequences=False,
+        doc_blocks=False,
         max_train_samples=None,
         max_eval_samples=None,
         cache_dir=None,
@@ -336,6 +337,27 @@ def load_pretraining_dataset(
             if eos_id is not None:
                 ids_cat.append(eos_id)
                 attn_cat.append(1)
+
+        if doc_blocks:
+            # full windows of each document become their own blocks; only tails are packed
+            full_ids, full_attn, rest_ids, rest_attn = [], [], [], []
+            for ids, attn in zip(ex["input_ids"], ex["attention_mask"]):
+                ids = list(ids) + ([eos_id] if eos_id is not None else [])
+                attn = list(attn) + ([1] if eos_id is not None else [])
+                n_full = len(ids) // block_size
+                for j in range(n_full):
+                    full_ids.append(ids[j * block_size:(j + 1) * block_size])
+                    full_attn.append(attn[j * block_size:(j + 1) * block_size])
+                rest_ids.extend(ids[n_full * block_size:])
+                rest_attn.extend(attn[n_full * block_size:])
+            total = (len(rest_ids) // block_size) * block_size
+            input_blocks = full_ids + [rest_ids[i:i + block_size] for i in range(0, total, block_size)]
+            attn_blocks = full_attn + [rest_attn[i:i + block_size] for i in range(0, total, block_size)]
+            return {
+                "input_ids": input_blocks,
+                "attention_mask": attn_blocks,
+                "labels": [b[:] for b in input_blocks],
+            }
 
         total = (len(ids_cat) // block_size) * block_size
         input_blocks = [
