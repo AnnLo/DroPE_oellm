@@ -5,3 +5,4 @@ outputs/
 multirun/
 wandb/
 *.out
+old_slurm_logs/

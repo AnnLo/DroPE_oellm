@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=drope-prelude-10b
+#SBATCH --job-name=drope-prelude-abl
 #SBATCH --account=AIFAC_F02_352
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=4
@@ -10,34 +10,48 @@
 #SBATCH --time=24:00:00
 #SBATCH --output=%x-%j.out
 #
-# Multi-node DroPE recalibration of prelude (Qwen3, ~9B). Resumable via fixed RUN_ID dir.
-# Env vars: RUN_CFG (prelude_drope), RUN_ID (10b_run1), DATA_DIR, RESULTS, SAVE_STEPS (100),
-#           ACCEL_CFG (accelerate_configs/deepspeed_zero3.yaml | deepspeed_zero3_hpz.yaml)
+# Multi-node DroPE recalibration of prelude (Qwen3, ~9B): 4 nodes x 4 A100-64GB = 16 GPUs,
+# DeepSpeed ZeRO-3 without offload. Resumable: every job continues from the newest
+# checkpoint in a FIXED output dir (RUN_ID), so jobs can be chained (submit_chain.sh).
+# If training already finished (final model saved), the job exits immediately.
+#
+# Submit one job:   sbatch run_drope_prelude_multinode.sh
+# Submit a chain:   ./submit_chain.sh 5            (5 x 24h jobs, each waits for the previous)
+# Quick 2-step multi-node smoke test (debug queue, 30 min):
+#   sbatch --qos=boost_qos_dbg --time=00:30:00 --export=ALL,RUN_ID=smoketest \
+#          run_drope_prelude_multinode.sh max_steps=2
+#
+# Env vars (sbatch --export=ALL,VAR=...):
+#   RUN_CFG   (prelude_drope)  run config in cfgs/run_cfg/
+#   RUN_ID    (10b_run1)       fixed name of the output dir -> enables resume; change for a new run
+#   DATA_DIR  (scratch longctx-mix)
+#   RESULTS   (scratch results)
+#   SAVE_STEPS (100)           ~1.7 h between checkpoints at 4 nodes; at most this much is lost on timeout
+#   ACCEL_CFG  (accelerate_configs/deepspeed_zero3.yaml)  e.g. accelerate_configs/deepspeed_zero3_hpz.yaml
 set -eo pipefail
 
 BASE=/leonardo_work/AIFAC_F02_352/anna
 SCR=/leonardo_scratch/fast/AIFAC_F02_352/anna
-DROPE_DIR=${DROPE_DIR:-$BASE/DroPE}
+DROPE_DIR=${DROPE_DIR:-$BASE/DroPE_abl}
 CONDA_ENV=${CONDA_ENV:-drope}
 RUN_CFG=${RUN_CFG:-prelude_drope}; RUN_CFG=${RUN_CFG%.yaml}
 RUN_ID=${RUN_ID:-10b_run1}
 DATA_DIR=${DATA_DIR:-$SCR/data/longctx-mix}
 RESULTS=${RESULTS:-$SCR/results}
 SAVE_STEPS=${SAVE_STEPS:-100}
-ACCEL_CFG=${ACCEL_CFG:-accelerate_configs/deepspeed_zero3_hpz.yaml}
+ACCEL_CFG=${ACCEL_CFG:-accelerate_configs/deepspeed_zero3_hpz.yaml}   # ZeRO++ hpZ (~30% faster multi-node)
 GPUS_PER_NODE=4
 NNODES=$SLURM_JOB_NUM_NODES
 NPROC=$((NNODES * GPUS_PER_NODE))
 
-# --- Fail fast ---
+# --- Fail fast ---------------------------------------------------------------
 [ -f "$DROPE_DIR/cfgs/run_cfg/$RUN_CFG.yaml" ] || { echo "ERROR: no config $RUN_CFG" >&2; exit 1; }
-[ -f "$DROPE_DIR/$ACCEL_CFG" ] || { echo "ERROR: no accelerate config $ACCEL_CFG" >&2; exit 1; }
 N_SHARDS=$(find "$DATA_DIR" -maxdepth 1 -name 'train-*.parquet' | wc -l)
 [ "$N_SHARDS" -gt 0 ] || { echo "ERROR: no shards in $DATA_DIR" >&2; exit 1; }
 [ -f "$DROPE_DIR/accuracy/accuracy.py" ] || { echo "ERROR: accuracy metric missing" >&2; exit 1; }
 grep -q DroPEQwen3ForCausalLM "$DROPE_DIR/custom_models/drope.py" || { echo "ERROR: Qwen3 patch missing" >&2; exit 1; }
 
-# --- Environment (inherited by srun tasks) ---
+# --- Environment (inherited by srun tasks on all nodes) ----------------------
 set +u
 source "$BASE/miniforge3/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
@@ -49,13 +63,14 @@ export XDG_CACHE_HOME="$BASE/cache" TRITON_CACHE_DIR="$SCR/cache/triton"
 export TORCH_EXTENSIONS_DIR="$BASE/cache/torch_extensions"
 export OMP_NUM_THREADS=8 HYDRA_FULL_ERROR=1 NCCL_DEBUG=WARN
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # less fragmentation with large logits
 mkdir -p "$WANDB_DIR" "$TRITON_CACHE_DIR" "$RESULTS"
 
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 MASTER_PORT=$((29500 + SLURM_JOB_ID % 1000))
 export MASTER_ADDR MASTER_PORT
 
+# Fixed output dir => the trainer finds and resumes from the newest checkpoint-*.
 OUT_DIR="$RESULTS/$RUN_ID"
 if [ -f "$OUT_DIR/config.json" ] && ls "$OUT_DIR"/*.safetensors >/dev/null 2>&1; then
     echo "Final model already in $OUT_DIR - training finished, nothing to do."
@@ -69,6 +84,7 @@ echo "Config $RUN_CFG | data $DATA_DIR ($N_SHARDS shards) | out $OUT_DIR"
 echo "Resuming from: ${LAST_CKPT:-<none, fresh start>}"
 python -c "import torch, flash_attn, transformers, deepspeed; print('torch', torch.__version__, '| flash_attn', flash_attn.__version__, '| transformers', transformers.__version__, '| deepspeed', deepspeed.__version__)"
 
+# Hydra overrides (quoted safely for the remote bash -c)
 OVERRIDES=(
   "run_cfg@_global_=$RUN_CFG"
   "dataset_id_or_path=$DATA_DIR"

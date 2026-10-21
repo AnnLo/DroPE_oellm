@@ -1,0 +1,44 @@
+# Arm C: Soft DroPE (RoPE angles scaled by alpha, linear 1 -> 0 over the first 50% of steps,
+# then pure NoPE), long-document data.
+defaults:
+  - override /trainer_cfg@_global_: base_trainer
+  - override /model_cfg@_global_: prelude/prelude9b
+  - override /data_cfg@_global_: fineweb_edu_shuffled
+  - _self_
+
+custom_class: custom_models.soft_drope.SoftDroPEQwen3ForCausalLM
+from_pretrained: true
+drope: true
+model_custom_config:
+  _target_: custom_models.soft_drope.SoftDroPEQwen3Config.from_pretrained
+  pretrained_model_name_or_path: ${model_name_or_path}
+  soft_mode: angle
+  rope_alpha: 1.0
+
+trainer:
+  callbacks:
+    _target_: hydra_utils.wrap_as_list
+    _args_:
+      - _target_: custom_models.soft_drope.RopeAlphaSchedule
+        start_frac: 0.0
+        end_frac: 0.5
+        shape: linear
+
+max_seq_length: 4096
+train_batch_size: 512
+per_device_train_batch_size: 2
+max_steps: 5000              # 512 x 4096 x 5000 = 10.5B tokens
+learning_rate: 1.0e-4
+lr_scheduler_type: cosine
+save_steps: 250
+trainer_args:
+  warmup_steps: 100
+  save_total_limit: 2
+
+# long-document mix: each training block is one contiguous document window
+data_log_name: longctx_longdoc_10b
+make_dataset_fn:
+  doc_blocks: true
+
+wandb_project: drope-prelude-ablations
+wandb_run_name: C_soft_drope_longdoc_${model_log_name}_${max_steps}steps
