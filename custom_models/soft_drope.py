@@ -185,6 +185,8 @@ class RopeAlphaSchedule(TrainerCallback):
         self._set(state, model)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
+        if not state.is_world_process_zero:
+            return
         try:
             import wandb
             if wandb.run is not None:
@@ -201,19 +203,49 @@ class RopeAlphaSchedule(TrainerCallback):
 
 
 # ============================================================================ Qwen3 (prelude)
-# Angle mode only. Qwen3 already has trained q_norm/k_norm, so there is no qk_norm option.
-from transformers.models.qwen3.modeling_qwen3 import Qwen3Config, Qwen3ForCausalLM
+# Qwen3 already has trained q_norm/k_norm, so there is no qk_norm option.
+#   soft_mode "angle":  RoPE angles scaled by alpha (theta * m * alpha)
+#   soft_mode "output": out = alpha * Attn_RoPE(x) + (1 - alpha) * Attn_NoPE(x)
+from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention, Qwen3Config, Qwen3ForCausalLM
+
+QWEN3_SOFT_MODES = ("angle", "output")
 
 
 class SoftDroPEQwen3Config(Qwen3Config):
     model_type = "qwen3_soft_drope"
 
     def __init__(self, rope_alpha: float = 1.0, soft_mode: str = "angle", **kwargs):
-        if soft_mode != "angle":
-            raise ValueError("SoftDroPEQwen3 supports soft_mode='angle' only")
+        if soft_mode not in QWEN3_SOFT_MODES:
+            raise ValueError(f"SoftDroPEQwen3: soft_mode must be one of {QWEN3_SOFT_MODES}, got {soft_mode!r}")
         self.rope_alpha = float(rope_alpha)
         self.soft_mode = soft_mode
         super().__init__(**kwargs)
+
+
+class OutputMixQwen3Attention(Qwen3Attention):
+    """Attention = alpha * (with RoPE) + (1 - alpha) * (without RoPE).
+
+    Both passes use the same q/k/v/o weights (incl. Qwen3's q_norm/k_norm); only the rotation
+    differs. Mixing after o_proj equals mixing before it, because o_proj is affine and the
+    weights alpha and (1 - alpha) sum to 1. The NoPE pass gets gradient from step 0, so the
+    model learns to work without positions while RoPE is still there.
+    alpha in {0, 1}: one pass only. alpha = 0 is exactly the DroPE (NoPE) model.
+    Training only in the mixed phase (use_cache=False); at alpha = 0 generation works normally.
+    """
+
+    def forward(self, hidden_states, position_embeddings, attention_mask=None, **kwargs):
+        alpha = float(getattr(self.config, "rope_alpha", 1.0))
+        cos, sin = position_embeddings
+        nope_pe = (torch.ones_like(cos), torch.zeros_like(sin))      # identity rotation
+
+        if alpha >= 1.0:
+            return super().forward(hidden_states, position_embeddings, attention_mask, **kwargs)
+        if alpha <= 0.0:
+            return super().forward(hidden_states, nope_pe, attention_mask, **kwargs)
+
+        out_rope, _ = super().forward(hidden_states, position_embeddings, attention_mask, **kwargs)
+        out_nope, _ = super().forward(hidden_states, nope_pe, attention_mask, **kwargs)
+        return alpha * out_rope + (1.0 - alpha) * out_nope, None
 
 
 class SoftDroPEQwen3ForCausalLM(Qwen3ForCausalLM):
@@ -222,10 +254,15 @@ class SoftDroPEQwen3ForCausalLM(Qwen3ForCausalLM):
     def __init__(self, config):
         super().__init__(config)
         self._inv_freq_orig = None
-        self.model.rotary_emb.register_forward_pre_hook(lambda module, args: self._apply_angle_alpha())
-        logger.info(f"SoftDroPE (Qwen3): mode=angle, rope_alpha={config.rope_alpha}")
+        if config.soft_mode == "angle":
+            # scale the rotation angles right before cos/sin are computed (once per forward)
+            self.model.rotary_emb.register_forward_pre_hook(lambda module, args: self._apply_angle_alpha())
+        else:  # "output": RoPE itself is untouched; each attention layer mixes the two passes
+            for layer in self.model.layers:
+                layer.self_attn.__class__ = OutputMixQwen3Attention   # same weights, new forward
+        logger.info(f"SoftDroPE (Qwen3): mode={config.soft_mode}, rope_alpha={config.rope_alpha}")
 
-    # same as the Llama version: inv_freq <- inv_freq_orig * alpha (alpha=0 -> cos=1, sin=0)
+    # angle mode, same as the Llama version: inv_freq <- inv_freq_orig * alpha
     _apply_angle_alpha = SoftDroPELlamaForCausalLM._apply_angle_alpha
 
 

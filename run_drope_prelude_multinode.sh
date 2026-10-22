@@ -2,6 +2,7 @@
 #SBATCH --job-name=drope-prelude-abl
 #SBATCH --account=AIFAC_F02_352
 #SBATCH --partition=boost_usr_prod
+#SBATCH --qos=normal
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
